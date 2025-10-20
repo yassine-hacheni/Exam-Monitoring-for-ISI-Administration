@@ -1,0 +1,46 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  // Sélection de fichiers
+  selectFile: (fileType) => ipcRenderer.invoke('select-file', fileType),
+
+  // Sauvegarde de fichiers uploadés
+  saveUploadedFile: (fileName, filePath) =>
+    ipcRenderer.invoke('save-uploaded-file', { fileName, filePath }),
+
+  // Exécution de l'algorithme Python
+  runPythonAlgorithm: (files) => ipcRenderer.invoke('run-python-algorithm', files),
+
+  // Lecture des résultats
+  readExcelResults: (filePath) => ipcRenderer.invoke('read-excel-results', filePath),
+
+  // Sauvegarde des résultats
+  saveResultsFile: () => ipcRenderer.invoke('save-results-file'),
+
+  // Écoute des logs Python en temps réel
+  onPythonLog: (callback) => {
+    ipcRenderer.on('python-log', (event, data) => callback(data));
+  },
+
+  onPythonError: (callback) => {
+    ipcRenderer.on('python-error', (event, data) => callback(data));
+  },
+  generateGlobalDocuments: () => ipcRenderer.invoke('generate-global-documents'),
+  generateTeacherDocument: (teacherId) => ipcRenderer.invoke('generate-teacher-document', teacherId),
+  openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
+
+  // ⭐ NOUVEAU : Gestion de l'historique (BASE DE DONNÉES)
+  savePlanningSession: (data) => ipcRenderer.invoke('save-planning-session', data),
+  getAllSessions: () => ipcRenderer.invoke('get-all-sessions'),
+  getSessionDetails: (sessionId) => ipcRenderer.invoke('get-session-details', sessionId),
+  deleteSession: (sessionId) => ipcRenderer.invoke('delete-session', sessionId),
+  exportSavedSession: (sessionId) => ipcRenderer.invoke('export-saved-session', sessionId),
+  getDashboardStats: () => ipcRenderer.invoke('get-dashboard-stats'),
+  
+  // ⭐ NOUVEAU : Permutation d'enseignants
+  swapTeachers: (swapData) => ipcRenderer.invoke('swap-teachers', swapData),
+  
+  // ⭐ NOUVEAU : Changement de créneau pour un enseignant
+  changeTeacherSlot: (changeData) => ipcRenderer.invoke('change-teacher-slot', changeData),
+
+});
