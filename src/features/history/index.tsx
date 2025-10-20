@@ -58,6 +58,7 @@ export default function HistoryPage() {
     try {
       const result = await (window as any).electronAPI.getSessionDetails(sessionId);
       if (result.success) {
+        // ✅ CORRECTION ICI - Utilisez navigate au lieu de window.location.href
         navigate({
           to: '/history/$sessionId',
           params: { sessionId: sessionId.toString() }
@@ -147,7 +148,6 @@ export default function HistoryPage() {
             <Button onClick={() => navigate({ to: '/planning' })}>
               Créer un Planning
             </Button>
-          </div>
           </div>
         </Card>
       ) : (

@@ -19,9 +19,11 @@ from io import BytesIO
 import re
 import pandas as pd
 from docx.shared import RGBColor
+from docx2pdf import convert
+import tempfile
 
 # ============================================================================
-# 🔹 CHARGEMENT AUTOMATIQUE DU FICHIER DES ENSEIGNANTS
+# CHARGEMENT AUTOMATIQUE DU FICHIER DES ENSEIGNANTS
 # ============================================================================
 
 def load_enseignants_mapping():
@@ -56,7 +58,7 @@ def load_enseignants_mapping():
 
 
 # ============================================================================
-# 🔹 OUTILS DE REMPLACEMENT DE TEXTE
+# OUTILS DE REMPLACEMENT DE TEXTE
 # ============================================================================
 
 def replace_text_in_paragraph(paragraph, old_text, new_text):
@@ -114,14 +116,14 @@ def replace_text_in_document_san(doc, old_text):
 
 
 # ============================================================================
-# 🔹 TRAITEMENT DES DOCUMENTS PAR JOUR (AVEC MISE EN PAGE)
+# TRAITEMENT DES DOCUMENTS PAR JOUR (AVEC MISE EN PAGE)
 # ============================================================================
 
 def process_day_document(template_path, data, session_type):
     """
     Traite les documents par jour avec correction des lignes vides et mise en page.
-    ✅ Supprime TOUTES les lignes du modèle avant d'ajouter les données réelles
-    ✅ Applique la mise en page (couleurs, formatage)
+    Supprime TOUTES les lignes du modèle avant d'ajouter les données réelles
+    Applique la mise en page (couleurs, formatage)
     """
     doc = Document(template_path)
     replace_text_in_document(doc, "[smstre]", "2")
@@ -139,13 +141,13 @@ def process_day_document(template_path, data, session_type):
             if not session_data:
                 continue
 
-            # ✅ ÉTAPE 1: Supprimer TOUTES les lignes vides du modèle
+            # ÉTAPE 1: Supprimer TOUTES les lignes vides du modèle
             # (garde seulement la ligne d'en-tête)
             while len(table.rows) > 1:
                 tbl = table._tbl
                 tbl.remove(tbl.tr_lst[-1])
 
-            # ✅ ÉTAPE 2: Ajouter les vraies données avec mise en page
+            # ÉTAPE 2: Ajouter les vraies données avec mise en page
             for teacher_info in session_data:
                 row_cells = table.add_row().cells
                 if len(teacher_info) >= 2:
@@ -162,27 +164,27 @@ def process_day_document(template_path, data, session_type):
 
 
 # ============================================================================
-# 🔹 TRAITEMENT DES CONVOCATIONS ENSEIGNANTS (AVEC MISE EN PAGE)
+# TRAITEMENT DES CONVOCATIONS ENSEIGNANTS (AVEC MISE EN PAGE)
 # ============================================================================
 
 def process_teacher_document(template_path, prof_name, prof_data):
     """
     Traite les convocations enseignants avec correction des lignes vides et mise en page.
-    ✅ Supprime TOUTES les lignes du modèle avant d'ajouter les données réelles
-    ✅ Applique la couleur bleue (RGB 0, 176, 240) aux horaires et durées
+    Supprime TOUTES les lignes du modèle avant d'ajouter les données réelles
+    Applique la couleur bleue (RGB 0, 176, 240) aux horaires et durées
     """
     doc = Document(template_path)
     replace_text_in_document(doc, "[prof]", prof_name)
 
     for table in doc.tables:
         if len(table.columns) == 3:
-            # ✅ ÉTAPE 1: Supprimer TOUTES les lignes vides du modèle
+            # ÉTAPE 1: Supprimer TOUTES les lignes vides du modèle
             # (garde seulement la ligne d'en-tête)
             while len(table.rows) > 1:
                 tbl = table._tbl
                 tbl.remove(tbl.tr_lst[-1])
 
-            # ✅ ÉTAPE 2: Ajouter les vraies données avec mise en page
+            # ÉTAPE 2: Ajouter les vraies données avec mise en page
             for date, surveillances in prof_data.items():
                 for surveillance in surveillances:
                     row_cells = table.add_row().cells
@@ -208,11 +210,29 @@ def process_teacher_document(template_path, prof_name, prof_data):
                     run = row_cells[2].paragraphs[0].add_run(duree_text)
                     run.font.color.rgb = RGBColor(0, 176, 240)
 
-    return doc
+    # Convert to PDF and return
+    # Create temporary files for docx and pdf
+    with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as temp_docx:
+        temp_docx_path = temp_docx.name
+        doc.save(temp_docx_path)
+
+    # Convert to PDF
+    temp_pdf_path = temp_docx_path.replace('.docx', '.pdf')
+    convert(temp_docx_path, temp_pdf_path)
+
+    # Read PDF into BytesIO
+    with open(temp_pdf_path, 'rb') as pdf_file:
+        pdf_buffer = BytesIO(pdf_file.read())
+
+    # Clean up temporary files
+    os.unlink(temp_docx_path)
+    os.unlink(temp_pdf_path)
+
+    return pdf_buffer
 
 
 # ============================================================================
-# 🔹 ORGANISATION DES DONNÉES
+# ORGANISATION DES DONNÉES
 # ============================================================================
 
 def organize_data_by_day(planning_data, enseignants_dict):
@@ -351,12 +371,10 @@ def generate_global_documents(planning_data, output_dir):
                     teacher_id, teacher_name = key.split("::", 1)
                     # Nom du document: nomprenom_semstre_session_annee
                     safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', teacher_name)
-                    conv_filename = f"{safe_name}_S{semester}_{session}_{year}.docx"
-                    doc = process_teacher_document(conv_template_path, teacher_name, prof_data)
-                    docx_buffer = BytesIO()
-                    doc.save(docx_buffer)
-                    docx_buffer.seek(0)
-                    zipf.writestr(conv_filename, docx_buffer.getvalue())
+                    conv_filename = f"{safe_name}_S{semester}_{session}_{year}.pdf"
+                    pdf_buffer = process_teacher_document(conv_template_path, teacher_name, prof_data)
+                    pdf_buffer.seek(0)
+                    zipf.writestr(conv_filename, pdf_buffer.getvalue())
                     convocations_created += 1
 
         return {
@@ -400,16 +418,18 @@ def generate_teacher_document(planning_data, teacher_id, output_dir):
         if not teacher_data:
             return {'success': False, 'error': f"Aucune surveillance trouvée pour l'enseignant ID {teacher_id}"}
 
-        doc = process_teacher_document(template_path, teacher_name, teacher_data)
+        pdf_buffer = process_teacher_document(template_path, teacher_name, teacher_data)
 
         # Nom du document: nomprenom_semstre_session_annee
         safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', teacher_name)
         semester = "2"
         session = "Principale"
         year = "2024-2025"
-        filename = f"{safe_name}_S{semester}_{session}_{year}.docx"
+        filename = f"{safe_name}_S{semester}_{session}_{year}.pdf"
         output_path = os.path.join(output_dir, filename)
-        doc.save(output_path)
+        # Save PDF to file
+        with open(output_path, 'wb') as f:
+            f.write(pdf_buffer.getvalue())
 
         surveillances_count = sum(len(v) for v in teacher_data.values())
         return {
