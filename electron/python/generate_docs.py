@@ -21,7 +21,8 @@ import pandas as pd
 from docx.shared import RGBColor
 from docx2pdf import convert
 import tempfile
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # ============================================================================
 # UTILITAIRE DE CHEMIN POUR PYINSTALLER
@@ -361,30 +362,13 @@ def organize_data_by_teacher(planning_data, enseignants_dict):
 
 def generate_global_documents(planning_data, excel_dir, output_dir):
     """
-    Génère tous les documents dans un ZIP.
+    Génère tous les documents dans un ZIP - VERSION OPTIMISÉE
     """
     try:
         enseignants_dict = load_enseignants_mapping(excel_dir)
-
-        # ✅ Debug - Afficher où on cherche
-        print(f"🔍 Recherche du template...", file=sys.stderr)
-        print(f"🔍 sys._MEIPASS exists: {hasattr(sys, '_MEIPASS')}", file=sys.stderr)
-        if hasattr(sys, '_MEIPASS'):
-            print(f"🔍 sys._MEIPASS: {sys._MEIPASS}", file=sys.stderr)
-        print(f"🔍 __file__: {__file__}", file=sys.stderr)
-        print(f"🔍 os.getcwd(): {os.getcwd()}", file=sys.stderr)
-
         template_source = get_resource_path('enseignansParSeance.docx')
-        print(f"🔍 Template source: {template_source}", file=sys.stderr)
-        print(f"🔍 Template exists: {os.path.exists(template_source)}", file=sys.stderr)
 
-        # Si le template n'existe pas, lister les fichiers disponibles
         if not os.path.exists(template_source):
-            if hasattr(sys, '_MEIPASS'):
-                print(f"🔍 Fichiers dans _MEIPASS:", file=sys.stderr)
-                for f in os.listdir(sys._MEIPASS):
-                    print(f"  - {f}", file=sys.stderr)
-
             return {'success': False, 'error': f'Template non trouvé: {template_source}'}
 
         days_data, session_type = organize_data_by_day(planning_data, enseignants_dict)
@@ -398,11 +382,18 @@ def generate_global_documents(planning_data, excel_dir, output_dir):
         docs_created = 0
         convocations_created = 0
 
+        # ✅ ÉTAPE 1: Générer tous les DOCX d'abord (RAPIDE)
+        temp_dir = tempfile.mkdtemp()
+        docx_files = []
+
+        print("📝 Génération des documents DOCX...", file=sys.stderr)
+
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Documents par jour (restent en DOCX dans le ZIP)
             for date, data in days_data.items():
                 if '/' not in date:
                     continue
-                doc = process_day_document(template_source, data, session_type)  # ✅ Utiliser template_source
+                doc = process_day_document(template_source, data, session_type)
                 docx_buffer = BytesIO()
                 doc.save(docx_buffer)
                 docx_buffer.seek(0)
@@ -411,19 +402,52 @@ def generate_global_documents(planning_data, excel_dir, output_dir):
                 docs_created += 1
 
             teachers_data = organize_data_by_teacher(planning_data, enseignants_dict)
-
-            # ✅ Obtenir le template de convocation
             conv_template_source = get_resource_path('Convocation.docx')
 
             if os.path.exists(conv_template_source):
+                # Générer tous les DOCX temporaires
                 for key, prof_data in teachers_data.items():
                     teacher_id, teacher_name = key.split("::", 1)
                     safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', teacher_name)
-                    conv_filename = f"{safe_name}_S{semester}_{session}_{year}.pdf"
-                    pdf_buffer = process_teacher_document(conv_template_source, teacher_name, prof_data)  # ✅ Utiliser conv_template_source
-                    pdf_buffer.seek(0)
-                    zipf.writestr(conv_filename, pdf_buffer.getvalue())
-                    convocations_created += 1
+
+                    doc = process_teacher_document_fast(conv_template_source, teacher_name, prof_data)
+
+                    temp_docx = os.path.join(temp_dir, f"{safe_name}.docx")
+                    doc.save(temp_docx)
+                    docx_files.append((temp_docx, safe_name))
+
+                print(f"🔄 Conversion de {len(docx_files)} fichiers en PDF...", file=sys.stderr)
+
+                # ✅ ÉTAPE 2: Convertir tous les DOCX en PDF en parallèle
+                pdf_files = []
+
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = {}
+                    for docx_path, safe_name in docx_files:
+                        pdf_path = docx_path.replace('.docx', '.pdf')
+                        future = executor.submit(convert_single_docx_to_pdf, docx_path, pdf_path)
+                        futures[future] = (pdf_path, safe_name)
+
+                    # Attendre la fin avec progression
+                    completed = 0
+                    for future in as_completed(futures):
+                        pdf_path, safe_name = futures[future]
+                        if future.result():
+                            pdf_files.append((pdf_path, safe_name))
+                            completed += 1
+                            print(f"✅ Converti {completed}/{len(docx_files)}", file=sys.stderr)
+
+                # ✅ ÉTAPE 3: Ajouter les PDFs au ZIP
+                for pdf_path, safe_name in pdf_files:
+                    if os.path.exists(pdf_path):
+                        conv_filename = f"{safe_name}_S{semester}_{session}_{year}.pdf"
+                        with open(pdf_path, 'rb') as pdf_file:
+                            zipf.writestr(conv_filename, pdf_file.read())
+                        convocations_created += 1
+
+        # Nettoyer les fichiers temporaires
+        import shutil
+        shutil.rmtree(temp_dir)
 
         return {
             'success': True,
@@ -434,8 +458,52 @@ def generate_global_documents(planning_data, excel_dir, output_dir):
         }
 
     except Exception as e:
-        return {'success': False, 'error': f'Erreur: {str(e)}'}
+        import traceback
+        return {'success': False, 'error': f'Erreur: {str(e)}\n{traceback.format_exc()}'}
 
+def process_teacher_document_fast(template_path, prof_name, prof_data):
+    """
+    VERSION RAPIDE - Retourne juste le doc sans conversion
+    """
+    doc = Document(template_path)
+    replace_text_in_document(doc, "[prof]", prof_name)
+
+    for table in doc.tables:
+        if len(table.columns) == 3:
+            while len(table.rows) > 1:
+                tbl = table._tbl
+                tbl.remove(tbl.tr_lst[-1])
+
+            for date, surveillances in prof_data.items():
+                for surveillance in surveillances:
+                    row_cells = table.add_row().cells
+                    row_cells[0].text = date
+
+                    horaire_text = f"{surveillance[0]} - {surveillance[1]}"
+                    for paragraph in row_cells[1].paragraphs:
+                        paragraph.clear()
+                    run = row_cells[1].paragraphs[0].add_run(horaire_text)
+                    run.font.color.rgb = RGBColor(0, 176, 240)
+
+                    duree_text = "1.5h"
+                    for paragraph in row_cells[2].paragraphs:
+                        paragraph.clear()
+                    run = row_cells[2].paragraphs[0].add_run(duree_text)
+                    run.font.color.rgb = RGBColor(0, 176, 240)
+
+    return doc
+
+def convert_single_docx_to_pdf(docx_path, pdf_path):
+    """
+    Convertit un seul DOCX en PDF
+    """
+    from docx2pdf import convert
+    try:
+        convert(docx_path, pdf_path)
+        return True
+    except Exception as e:
+        print(f"Erreur conversion {docx_path}: {e}", file=sys.stderr)
+        return False
 
 def generate_teacher_document(planning_data, teacher_id, excel_dir, output_dir):
     """
