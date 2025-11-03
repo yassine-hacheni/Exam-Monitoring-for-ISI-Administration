@@ -5,8 +5,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFile: (fileType) => ipcRenderer.invoke('select-file', fileType),
 
   // Sauvegarde de fichiers uploadés
-  saveUploadedFile: (fileName, filePath) =>
-    ipcRenderer.invoke('save-uploaded-file', { fileName, filePath }),
+  saveUploadedFile: (data) =>
+    ipcRenderer.invoke('save-uploaded-file', data),
 
   // Exécution de l'algorithme Python
   runPythonAlgorithm: (files) => ipcRenderer.invoke('run-python-algorithm', files),

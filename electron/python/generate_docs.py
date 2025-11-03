@@ -22,17 +22,51 @@ from docx.shared import RGBColor
 from docx2pdf import convert
 import tempfile
 
+
+# ============================================================================
+# UTILITAIRE DE CHEMIN POUR PYINSTALLER
+# ============================================================================
+
+def get_resource_path(relative_path):
+    """
+    Obtient le chemin absolu d'une ressource.
+    Cherche d'abord à côté de l'exe, puis dans _MEIPASS
+    """
+    # 1. D'abord, chercher à côté de l'executable
+    if getattr(sys, 'frozen', False):
+        # Running in PyInstaller bundle
+        exe_dir = os.path.dirname(sys.executable)
+        external_path = os.path.join(exe_dir, relative_path)
+
+        if os.path.exists(external_path):
+            print(f"✅ Template trouvé à côté de l'exe: {external_path}", file=sys.stderr)
+            return external_path
+
+        # 2. Sinon, chercher dans _MEIPASS (à l'intérieur de l'exe)
+        internal_path = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(internal_path):
+            print(f"✅ Template trouvé dans l'exe: {internal_path}", file=sys.stderr)
+            return internal_path
+
+        print(f"❌ Template introuvable: {relative_path}", file=sys.stderr)
+        print(f"   Cherché dans: {exe_dir}", file=sys.stderr)
+        print(f"   Cherché dans: {sys._MEIPASS}", file=sys.stderr)
+
+        return internal_path
+    else:
+        # Running in normal Python
+        base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
 # ============================================================================
 # CHARGEMENT AUTOMATIQUE DU FICHIER DES ENSEIGNANTS
 # ============================================================================
 
-def load_enseignants_mapping():
+def load_enseignants_mapping(excel_dir):
     """
-    Charge le fichier 'Enseignants avec code ensiegant responsable.xlsx'
-    et crée un dictionnaire {id: "Nom Prénom (Grade)"}.
+    Charge le fichier 'Enseignants_participants.xlsx'
+    depuis le même dossier que le fichier Excel de planning.
     """
-    base_dir = os.path.dirname(__file__)
-    enseignants_file = os.path.join(base_dir, "Enseignants_participants.xlsx")
+    enseignants_file = os.path.join(excel_dir, "Enseignants_participants.xlsx")
 
     if not os.path.exists(enseignants_file):
         print(json.dumps({
@@ -55,7 +89,6 @@ def load_enseignants_mapping():
             continue
 
     return enseignants_dict
-
 
 # ============================================================================
 # OUTILS DE REMPLACEMENT DE TEXTE
@@ -323,23 +356,39 @@ def organize_data_by_teacher(planning_data, enseignants_dict):
 
 
 # ============================================================================
-# 🔹 GÉNÉRATION DES DOCUMENTS
+# GÉNÉRATION DES DOCUMENTS
 # ============================================================================
 
-def generate_global_documents(planning_data, output_dir):
+def generate_global_documents(planning_data, excel_dir, output_dir):
     """
-    Génère tous les documents (par jour et convocations) dans un ZIP.
+    Génère tous les documents dans un ZIP.
     """
     try:
-        enseignants_dict = load_enseignants_mapping()
-        template_path = os.path.join(os.path.dirname(__file__), 'enseignansParSeance.docx')
+        enseignants_dict = load_enseignants_mapping(excel_dir)
 
-        if not os.path.exists(template_path):
-            return {'success': False, 'error': f'Template non trouvé: {template_path}'}
+        # ✅ Debug - Afficher où on cherche
+        print(f"🔍 Recherche du template...", file=sys.stderr)
+        print(f"🔍 sys._MEIPASS exists: {hasattr(sys, '_MEIPASS')}", file=sys.stderr)
+        if hasattr(sys, '_MEIPASS'):
+            print(f"🔍 sys._MEIPASS: {sys._MEIPASS}", file=sys.stderr)
+        print(f"🔍 __file__: {__file__}", file=sys.stderr)
+        print(f"🔍 os.getcwd(): {os.getcwd()}", file=sys.stderr)
+
+        template_source = get_resource_path('enseignansParSeance.docx')
+        print(f"🔍 Template source: {template_source}", file=sys.stderr)
+        print(f"🔍 Template exists: {os.path.exists(template_source)}", file=sys.stderr)
+
+        # Si le template n'existe pas, lister les fichiers disponibles
+        if not os.path.exists(template_source):
+            if hasattr(sys, '_MEIPASS'):
+                print(f"🔍 Fichiers dans _MEIPASS:", file=sys.stderr)
+                for f in os.listdir(sys._MEIPASS):
+                    print(f"  - {f}", file=sys.stderr)
+
+            return {'success': False, 'error': f'Template non trouvé: {template_source}'}
 
         days_data, session_type = organize_data_by_day(planning_data, enseignants_dict)
 
-        # Nom du ZIP: affectation_semstre_session_annee
         semester = "2"
         session = "Principale"
         year = "2024-2025"
@@ -350,11 +399,10 @@ def generate_global_documents(planning_data, output_dir):
         convocations_created = 0
 
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            # Génération des documents par jour
             for date, data in days_data.items():
                 if '/' not in date:
                     continue
-                doc = process_day_document(template_path, data, session_type)
+                doc = process_day_document(template_source, data, session_type)  # ✅ Utiliser template_source
                 docx_buffer = BytesIO()
                 doc.save(docx_buffer)
                 docx_buffer.seek(0)
@@ -362,48 +410,46 @@ def generate_global_documents(planning_data, output_dir):
                 zipf.writestr(filename, docx_buffer.getvalue())
                 docs_created += 1
 
-            # Génération des convocations enseignants
             teachers_data = organize_data_by_teacher(planning_data, enseignants_dict)
-            conv_template_path = os.path.join(os.path.dirname(__file__), 'Convocation.docx')
 
-            if os.path.exists(conv_template_path):
+            # ✅ Obtenir le template de convocation
+            conv_template_source = get_resource_path('Convocation.docx')
+
+            if os.path.exists(conv_template_source):
                 for key, prof_data in teachers_data.items():
                     teacher_id, teacher_name = key.split("::", 1)
-                    # Nom du document: nomprenom_semstre_session_annee
                     safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', teacher_name)
                     conv_filename = f"{safe_name}_S{semester}_{session}_{year}.pdf"
-                    pdf_buffer = process_teacher_document(conv_template_path, teacher_name, prof_data)
+                    pdf_buffer = process_teacher_document(conv_template_source, teacher_name, prof_data)  # ✅ Utiliser conv_template_source
                     pdf_buffer.seek(0)
                     zipf.writestr(conv_filename, pdf_buffer.getvalue())
                     convocations_created += 1
 
         return {
             'success': True,
-            'zip_path': zip_path,
+            'file': zip_path,
             'days_count': docs_created,
             'convocations_count': convocations_created,
-            'message': f'{docs_created} documents journaliers et {convocations_created} convocations générés avec succès'
+            'message': f'{docs_created} documents journaliers et {convocations_created} convocations générés'
         }
 
     except Exception as e:
         return {'success': False, 'error': f'Erreur: {str(e)}'}
 
 
-# ============================================================================
-# 🔹 GÉNÉRATION D'UN DOCUMENT INDIVIDUEL
-# ============================================================================
-
-def generate_teacher_document(planning_data, teacher_id, output_dir):
+def generate_teacher_document(planning_data, teacher_id, excel_dir, output_dir):
     """
-    Génère le document de convocation pour un enseignant spécifique.
+    Génère le document pour un enseignant spécifique.
     """
     try:
-        enseignants_dict = load_enseignants_mapping()
+        enseignants_dict = load_enseignants_mapping(excel_dir)
         teacher_id = str(int(teacher_id))
-        template_path = os.path.join(os.path.dirname(__file__), 'Convocation.docx')
 
-        if not os.path.exists(template_path):
-            return {'success': False, 'error': f'Template non trouvé: {template_path}'}
+        # ✅ Obtenir le template depuis les ressources PyInstaller
+        template_source = get_resource_path('Convocation.docx')
+
+        if not os.path.exists(template_source):
+            return {'success': False, 'error': f'Template non trouvé: {template_source}'}
 
         teachers_data = organize_data_by_teacher(planning_data, enseignants_dict)
         teacher_name = None
@@ -416,25 +462,24 @@ def generate_teacher_document(planning_data, teacher_id, output_dir):
                 break
 
         if not teacher_data:
-            return {'success': False, 'error': f"Aucune surveillance trouvée pour l'enseignant ID {teacher_id}"}
+            return {'success': False, 'error': f"Aucune surveillance pour l'enseignant ID {teacher_id}"}
 
-        pdf_buffer = process_teacher_document(template_path, teacher_name, teacher_data)
+        pdf_buffer = process_teacher_document(template_source, teacher_name, teacher_data)  # ✅ Utiliser template_source
 
-        # Nom du document: nomprenom_semstre_session_annee
         safe_name = re.sub(r'[^a-zA-Z0-9_]+', '_', teacher_name)
         semester = "2"
         session = "Principale"
         year = "2024-2025"
         filename = f"{safe_name}_S{semester}_{session}_{year}.pdf"
         output_path = os.path.join(output_dir, filename)
-        # Save PDF to file
+
         with open(output_path, 'wb') as f:
             f.write(pdf_buffer.getvalue())
 
         surveillances_count = sum(len(v) for v in teacher_data.values())
         return {
             'success': True,
-            'file_path': output_path,
+            'file': output_path,
             'teacher_name': teacher_name,
             'surveillances_count': surveillances_count,
             'message': f'Document généré pour {teacher_name}'
@@ -442,7 +487,6 @@ def generate_teacher_document(planning_data, teacher_id, output_dir):
 
     except Exception as e:
         return {'success': False, 'error': str(e)}
-
 
 # ============================================================================
 # 🔹 POINT D'ENTRÉE PRINCIPAL
@@ -458,6 +502,9 @@ def main():
 
     command = sys.argv[1]
     data_file = sys.argv[2]
+
+    # ✅ Ajouter cette ligne pour obtenir le dossier du fichier Excel
+    excel_dir = os.path.dirname(os.path.abspath(data_file))
 
     try:
         df = pd.read_excel(data_file)
@@ -476,13 +523,13 @@ def main():
     output_dir = downloads_dir
 
     if command == 'global':
-        result = generate_global_documents(planning_data, output_dir)
+        result = generate_global_documents(planning_data, excel_dir, output_dir)  # ✅ Ajouter excel_dir
     elif command == 'teacher':
         if len(sys.argv) < 4:
             print(json.dumps({'success': False, 'error': 'ID enseignant manquant'}))
             return
         teacher_id = sys.argv[3]
-        result = generate_teacher_document(planning_data, teacher_id, output_dir)
+        result = generate_teacher_document(planning_data, teacher_id, excel_dir, output_dir)  # ✅ Ajouter excel_dir
     else:
         result = {'success': False, 'error': f'Commande inconnue: {command}'}
 

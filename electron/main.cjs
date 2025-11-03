@@ -14,8 +14,6 @@ const getPythonPath = () =>
     ? path.join(__dirname, 'python', 'venv', 'Scripts', 'python.exe')
     : path.join(process.resourcesPath, 'python', 'venv', 'Scripts', 'python.exe');
 
-const getPythonDir = () =>
-  isDev ? path.join(__dirname, 'python') : path.join(process.resourcesPath, 'python');
 
 const getIconPath = () =>
   isDev
@@ -101,7 +99,32 @@ app.on('activate', () => {
   }
 });
 
-// ============================================================================
+
+// ✅ Nouvelles fonctions de chemin
+const getPythonExecutable = (scriptName) => {
+  if (isDev) {
+    // ✅ En dev, utiliser Python avec venv
+    return {
+      command: path.join(__dirname, 'python', 'venv', 'Scripts', 'python.exe'),
+      args: [path.join(__dirname, 'python', `${scriptName}.py`)]
+    };
+  } else {
+    // ✅ En prod, utiliser l'exécutable PyInstaller
+    return {
+      command: path.join(process.resourcesPath, 'python', 'dist', `${scriptName}.exe`),
+      args: []
+    };
+  }
+};
+
+// ✅ AJOUTEZ CETTE NOUVELLE FONCTION
+const getPythonDir = () => {
+  if (isDev) {
+    return path.join(__dirname, 'python');
+  } else {
+    return path.join(process.resourcesPath, 'python', 'dist');
+  }
+};// ============================================================================
 // GESTION DES FICHIERS
 // ============================================================================
 
@@ -112,86 +135,88 @@ ipcMain.handle('select-file', async (event, fileType) => {
   });
 
   if (!result.canceled && result.filePaths.length > 0) {
+    console.log('✅ Fichier sélectionné:', result.filePaths[0]); // ✅ Debug
+
     return result.filePaths[0];
   }
   return null;
 });
 
-ipcMain.handle('save-uploaded-file', async (event, { fileName, filePath }) => {
+ipcMain.handle('save-uploaded-file', async (event, data) => {
   try {
+    console.log('🟢 Main - save-uploaded-file handler appelé');
+    console.log('🟢 Main - Type de data:', typeof data);
+    console.log('🟢 Main - data:', data);
+    console.log('🟢 Main - data stringifié:', JSON.stringify(data));
+    console.log('🟢 Main - Clés de data:', Object.keys(data));
+
+    const { fileName, filePath } = data;
+
+    console.log('🟢 Main - fileName extrait:', fileName);
+    console.log('🟢 Main - filePath extrait:', filePath);
+
+    if (!fileName || !filePath) {
+      console.error('❌ Missing fileName or filePath');
+      console.error('❌ fileName:', fileName);
+      console.error('❌ filePath:', filePath);
+      return { success: false, error: 'Missing fileName or filePath' };
+    }
+
+    if (typeof filePath !== 'string') {
+      console.error('❌ filePath n\'est pas une string:', filePath);
+      return { success: false, error: 'Invalid file path type' };
+    }
+
     const destPath = path.join(appDirs.uploadsDir, fileName);
+    console.log('💾 Destination:', destPath);
+
     await fs.copyFile(filePath, destPath);
+
+    console.log('✅ Fichier sauvegardé avec succès');
     return { success: true, path: destPath };
   } catch (error) {
-    console.error('Error saving file:', error);
+    console.error('❌ Error saving file:', error);
     return { success: false, error: error.message };
   }
-});
-
-// ============================================================================
-// EXÉCUTION PYTHON - CORRIGÉE POUR LES PERMISSIONS
+});// EXÉCUTION PYTHON - CORRIGÉE POUR LES PERMISSIONS
 // ============================================================================
 
+// ✅ Modifiez run-python-algorithm
 ipcMain.handle('run-python-algorithm', async (event, { teachersFile, wishesFile, examsFile, gradeHours }) => {
   return new Promise(async (resolve, reject) => {
     try {
-      const pythonPath = getPythonPath();
-      const pythonDir = getPythonDir();
-      const scriptPath = path.join(pythonDir, 'main.py');
+      const pythonExec = getPythonExecutable('main');
 
-      // ✅ Vérification de l'existence de Python
-      if (!fsSync.existsSync(pythonPath)) {
+      // Vérification
+      if (!fsSync.existsSync(pythonExec.command)) {
         const errorMsg = isDev
           ? 'Python environment not found. Please create virtual environment.'
-          : 'Python environment not found in application resources.';
+          : `Python executable not found at: ${pythonExec.command}`;
         reject(new Error(errorMsg));
         return;
       }
 
       console.log('Running Python script...');
-      console.log('Python path:', pythonPath);
-      console.log('Python dir:', pythonDir);
-      console.log('Workspace dir:', appDirs.pythonWorkspaceDir);
+      console.log('Command:', pythonExec.command);
 
-      // ✅ Copier les fichiers d'entrée vers le workspace utilisateur
-      try {
-        const teachersDest = path.join(appDirs.pythonWorkspaceDir, 'Enseignants_participants.xlsx');
-        const wishesDest = path.join(appDirs.pythonWorkspaceDir, 'Souhaits_avec_ids.xlsx');
-        const examsDest = path.join(appDirs.pythonWorkspaceDir, 'Répartition_SE_dedup.xlsx');
+      // Copier les fichiers d'entrée
+      const teachersDest = path.join(appDirs.pythonWorkspaceDir, 'Enseignants_participants.xlsx');
+      const wishesDest = path.join(appDirs.pythonWorkspaceDir, 'Souhaits_avec_ids.xlsx');
+      const examsDest = path.join(appDirs.pythonWorkspaceDir, 'Répartition_SE_dedup.xlsx');
 
-        await fs.copyFile(teachersFile, teachersDest);
-        await fs.copyFile(wishesFile, wishesDest);
-        await fs.copyFile(examsFile, examsDest);
+      await fs.copyFile(teachersFile, teachersDest);
+      await fs.copyFile(wishesFile, wishesDest);
+      await fs.copyFile(examsFile, examsDest);
 
-        console.log('✅ Input files copied to workspace');
-      } catch (error) {
-        reject(new Error(`Failed to copy input files: ${error.message}`));
-        return;
-      }
-
-      // ✅ Préparer les arguments CORRIGÉS pour le script Python
-      const args = [scriptPath];
-
-      // ✅ Ajouter les heures par grade comme argument JSON si disponible
+      // Préparer les arguments
+      const args = [...pythonExec.args];
       if (gradeHours && Object.keys(gradeHours).length > 0) {
-        const gradeHoursJson = JSON.stringify(gradeHours);
         args.push('--grade-hours');
-        args.push(gradeHoursJson);
-        console.log('Passing grade hours to Python:', gradeHoursJson);
+        args.push(JSON.stringify(gradeHours));
       }
 
-      // ❌ SUPPRIMÉ : L'argument --workspace-dir qui cause l'erreur
-      // args.push('--workspace-dir');
-      // args.push(appDirs.pythonWorkspaceDir);
-
-      console.log('Python command:', pythonPath, args.join(' '));
-
-      const pythonProcess = spawn(pythonPath, args, {
-        cwd: appDirs.pythonWorkspaceDir, // ✅ Utiliser le workspace comme répertoire de travail
-        env: {
-          ...process.env,
-          PYTHONPATH: pythonDir // ✅ Ajouter le chemin Python si nécessaire
-        }
+      const pythonProcess = spawn(pythonExec.command, args, {
+        cwd: appDirs.pythonWorkspaceDir,
       });
 
       let output = '';
@@ -219,40 +244,19 @@ ipcMain.handle('run-python-algorithm', async (event, { teachersFile, wishesFile,
         console.log(`Python process exited with code ${code}`);
 
         if (code === 0) {
-          // Vérifier le fichier de sortie dans le workspace
           const outputFile = path.join(appDirs.pythonWorkspaceDir, 'schedule_solution.xlsx');
 
           if (fsSync.existsSync(outputFile)) {
             const destPath = path.join(app.getPath('userData'), 'schedule_solution.xlsx');
-            try {
-              await fs.copyFile(outputFile, destPath);
+            await fs.copyFile(outputFile, destPath);
 
-              resolve({
-                success: true,
-                outputFile: destPath,
-                logs: output
-              });
-            } catch (error) {
-              reject(new Error(`Failed to copy output file: ${error.message}`));
-            }
+            resolve({
+              success: true,
+              outputFile: destPath,
+              logs: output
+            });
           } else {
-            // Vérifier aussi dans le répertoire Python original
-            const altOutputFile = path.join(pythonDir, 'schedule_solution.xlsx');
-            if (fsSync.existsSync(altOutputFile)) {
-              const destPath = path.join(app.getPath('userData'), 'schedule_solution.xlsx');
-              try {
-                await fs.copyFile(altOutputFile, destPath);
-                resolve({
-                  success: true,
-                  outputFile: destPath,
-                  logs: output
-                });
-              } catch (error) {
-                reject(new Error(`Failed to copy output file: ${error.message}`));
-              }
-            } else {
-              reject(new Error('Output file not generated. Check Python script for errors.'));
-            }
+            reject(new Error('Output file not generated.'));
           }
         } else {
           reject(new Error(`Python script failed: ${errorOutput}`));
@@ -260,7 +264,7 @@ ipcMain.handle('run-python-algorithm', async (event, { teachersFile, wishesFile,
       });
 
       pythonProcess.on('error', (error) => {
-        reject(new Error(`Failed to start Python process: ${error.message}`));
+        reject(new Error(`Failed to start: ${error.message}`));
       });
 
     } catch (error) {
@@ -505,30 +509,76 @@ ipcMain.handle('export-saved-session', async (event, sessionId) => {
 ipcMain.handle('generate-global-documents', async (event) => {
   return new Promise(async (resolve, reject) => {
     try {
-      const pythonPath = getPythonPath();
+      const pythonExec = getPythonExecutable('generate_docs');
       const pythonDir = getPythonDir();
-      const scriptPath = path.join(pythonDir, 'generate_docs.py');
       const excelPath = path.join(app.getPath('userData'), 'schedule_solution.xlsx');
 
-      if (!fsSync.existsSync(pythonPath)) {
-        reject(new Error('Python environment not found'));
+      if (!fsSync.existsSync(pythonExec.command)) {
+        reject(new Error('Python executable not found'));
         return;
       }
 
       if (!fsSync.existsSync(excelPath)) {
-        reject(new Error('No planning data found. Please generate a planning first.'));
+        reject(new Error('No planning data found.'));
         return;
       }
 
-      console.log('Generating global documents...');
-
-      // Copier le fichier Excel vers le workspace
+      // ✅ Copier schedule_solution.xlsx
       const workspaceExcelPath = path.join(appDirs.pythonWorkspaceDir, 'schedule_solution.xlsx');
       await fs.copyFile(excelPath, workspaceExcelPath);
 
-      const pythonProcess = spawn(pythonPath, [scriptPath, 'global', workspaceExcelPath], {
+      // ✅ Chercher et copier Enseignants_participants.xlsx
+      let teachersSourcePath = null;
+      const possiblePaths = [
+        path.join(appDirs.uploadsDir, 'Enseignants_participants.xlsx'),
+        path.join(app.getPath('userData'), 'Enseignants_participants.xlsx'),
+        path.join(pythonDir, 'Enseignants_participants.xlsx'),
+        path.join(appDirs.pythonWorkspaceDir, 'Enseignants_participants.xlsx')
+      ];
+
+      for (const possiblePath of possiblePaths) {
+        if (fsSync.existsSync(possiblePath)) {
+          teachersSourcePath = possiblePath;
+          break;
+        }
+      }
+
+      if (!teachersSourcePath) {
+        const searchedPaths = possiblePaths.join('\n- ');
+        reject(new Error(
+          `Fichier enseignants introuvable. Cherché dans:\n- ${searchedPaths}`
+        ));
+        return;
+      }
+
+      const teachersDestPath = path.join(appDirs.pythonWorkspaceDir, 'Enseignants_participants.xlsx');
+      await fs.copyFile(teachersSourcePath, teachersDestPath);
+      console.log(`✅ Enseignants file copied`);
+
+      // ✅✅✅ NOUVEAU: Copier les templates Word dans le workspace
+      const templates = ['Convocation.docx', 'enseignansParSeance.docx'];
+
+      for (const template of templates) {
+        const templateSourcePath = path.join(pythonDir, template);
+        const templateDestPath = path.join(appDirs.pythonWorkspaceDir, template);
+
+        console.log(`🔍 Recherche template: ${template}`);
+        console.log(`   Source: ${templateSourcePath}`);
+        console.log(`   Exists: ${fsSync.existsSync(templateSourcePath)}`);
+
+        if (fsSync.existsSync(templateSourcePath)) {
+          await fs.copyFile(templateSourcePath, templateDestPath);
+          console.log(`✅ Template ${template} copié vers workspace`);
+        } else {
+          reject(new Error(`Template ${template} introuvable à: ${templateSourcePath}`));
+          return;
+        }
+      }
+
+      const args = [...pythonExec.args, 'global', workspaceExcelPath];
+
+      const pythonProcess = spawn(pythonExec.command, args, {
         cwd: appDirs.pythonWorkspaceDir,
-        env: { ...process.env }
       });
 
       let output = '';
@@ -540,7 +590,6 @@ ipcMain.handle('generate-global-documents', async (event) => {
 
       pythonProcess.stderr.on('data', (data) => {
         errorOutput += data.toString();
-        console.error('Python Error:', data.toString());
       });
 
       pythonProcess.on('close', (code) => {
@@ -568,13 +617,12 @@ ipcMain.handle('generate-global-documents', async (event) => {
 ipcMain.handle('generate-teacher-document', async (event, teacherId) => {
   return new Promise(async (resolve, reject) => {
     try {
-      const pythonPath = getPythonPath();
+      const pythonExec = getPythonExecutable('generate_docs');
       const pythonDir = getPythonDir();
-      const scriptPath = path.join(pythonDir, 'generate_docs.py');
       const excelPath = path.join(app.getPath('userData'), 'schedule_solution.xlsx');
 
-      if (!fsSync.existsSync(pythonPath)) {
-        reject(new Error('Python environment not found'));
+      if (!fsSync.existsSync(pythonExec.command)) {
+        reject(new Error('Python executable not found'));
         return;
       }
 
@@ -583,15 +631,58 @@ ipcMain.handle('generate-teacher-document', async (event, teacherId) => {
         return;
       }
 
-      console.log(`Generating document for teacher ${teacherId}...`);
-
-      // Copier le fichier Excel vers le workspace
+      // ✅ Copier schedule_solution.xlsx
       const workspaceExcelPath = path.join(appDirs.pythonWorkspaceDir, 'schedule_solution.xlsx');
       await fs.copyFile(excelPath, workspaceExcelPath);
 
-      const pythonProcess = spawn(pythonPath, [scriptPath, 'teacher', workspaceExcelPath, teacherId], {
+      // ✅ Chercher et copier Enseignants_participants.xlsx
+      let teachersSourcePath = null;
+      const possiblePaths = [
+        path.join(appDirs.uploadsDir, 'Enseignants_participants.xlsx'),
+        path.join(app.getPath('userData'), 'Enseignants_participants.xlsx'),
+        path.join(pythonDir, 'Enseignants_participants.xlsx'),
+        path.join(appDirs.pythonWorkspaceDir, 'Enseignants_participants.xlsx')
+      ];
+
+      for (const possiblePath of possiblePaths) {
+        if (fsSync.existsSync(possiblePath)) {
+          teachersSourcePath = possiblePath;
+          break;
+        }
+      }
+
+      if (!teachersSourcePath) {
+        const searchedPaths = possiblePaths.join('\n- ');
+        reject(new Error(
+          `Fichier enseignants introuvable. Cherché dans:\n- ${searchedPaths}`
+        ));
+        return;
+      }
+
+      const teachersDestPath = path.join(appDirs.pythonWorkspaceDir, 'Enseignants_participants.xlsx');
+      await fs.copyFile(teachersSourcePath, teachersDestPath);
+      console.log(`✅ Enseignants file copied`);
+
+      // ✅✅✅ NOUVEAU: Copier le template Convocation.docx dans le workspace
+      const templateSourcePath = path.join(pythonDir, 'Convocation.docx');
+      const templateDestPath = path.join(appDirs.pythonWorkspaceDir, 'Convocation.docx');
+
+      console.log(`🔍 Recherche template Convocation.docx`);
+      console.log(`   Source: ${templateSourcePath}`);
+      console.log(`   Exists: ${fsSync.existsSync(templateSourcePath)}`);
+
+      if (fsSync.existsSync(templateSourcePath)) {
+        await fs.copyFile(templateSourcePath, templateDestPath);
+        console.log(`✅ Template Convocation.docx copié vers workspace`);
+      } else {
+        reject(new Error(`Template Convocation.docx introuvable à: ${templateSourcePath}`));
+        return;
+      }
+
+      const args = [...pythonExec.args, 'teacher', workspaceExcelPath, teacherId];
+
+      const pythonProcess = spawn(pythonExec.command, args, {
         cwd: appDirs.pythonWorkspaceDir,
-        env: { ...process.env }
       });
 
       let output = '';
@@ -600,42 +691,40 @@ ipcMain.handle('generate-teacher-document', async (event, teacherId) => {
       pythonProcess.stdout.on('data', (data) => {
         const text = data.toString();
         output += text;
-        console.log('Python stdout:', text);
+        console.log('📤 Python stdout:', text);
       });
 
       pythonProcess.stderr.on('data', (data) => {
-        errorOutput += data.toString();
-        console.error('Python stderr:', data.toString());
+        const text = data.toString();
+        errorOutput += text;
+        console.error('❌ Python stderr:', text);
       });
 
       pythonProcess.on('close', (code) => {
-        console.log(`Python process exited with code ${code}`);
-        console.log('Final stdout:', output);
-        console.log('Final stderr:', errorOutput);
+        console.log(`🔚 Process exited with code ${code}`);
 
         if (code === 0) {
           try {
             const result = JSON.parse(output);
             resolve(result);
           } catch (e) {
-            reject(new Error(`Failed to parse result: ${output}`));
+            reject(new Error(`Failed to parse result: ${output}\nParse error: ${e.message}`));
           }
         } else {
-          const errorMsg = errorOutput || output || 'No error output';
-          reject(new Error(`Process exited with code ${code}: ${errorMsg}`));
+          reject(new Error(`Process exited with code ${code}\nError: ${errorOutput}\nOutput: ${output}`));
         }
       });
 
       pythonProcess.on('error', (error) => {
+        console.error('❌ Process error:', error);
         reject(new Error(`Failed to start: ${error.message}`));
       });
     } catch (error) {
+      console.error('❌ Setup error:', error);
       reject(new Error(`Setup error: ${error.message}`));
     }
   });
 });
-
-// Ouvrir un fichier avec l'application par défaut
 ipcMain.handle('open-file', async (event, filePath) => {
   try {
     const { shell } = require('electron');

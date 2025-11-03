@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "electron": "cross-env NODE_ENV=development electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && npm run electron\"",
-    "electron:build": "npm run build && electron-builder --win --x64 --publish=never",
+    "build:python": "cd electron/python && venv\\Scripts\\activate && pyinstaller --onefile main.py && pyinstaller --onefile generate_docs.py",
+    "electron:build": "npm run build:python && npm run build && electron-builder --win --x64 --publish=never",
     "electron:build:dir": "npm run build && electron-builder --win --x64 --dir",
     "postinstall": "electron-builder install-app-deps && electron-rebuild -f -w better-sqlite3",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
@@ -117,11 +118,20 @@
     ],
     "extraResources": [
       {
-        "from": "electron/python",
-        "to": "python",
-        "filter": [
-          "**/*"
-        ]
+        "from": "electron/python/dist",
+        "to": "python/dist"
+      },
+      {
+        "from": "electron/python/Convocation.docx",
+        "to": "python/dist/Convocation.docx"
+      },
+      {
+        "from": "electron/python/enseignansParSeance.docx",
+        "to": "python/dist/enseignansParSeance.docx"
+      },
+      {
+        "from": "electron/python/Enseignants_participants.xlsx",
+        "to": "python/dist/Enseignants_participants.xlsx"
       }
     ],
     "win": {

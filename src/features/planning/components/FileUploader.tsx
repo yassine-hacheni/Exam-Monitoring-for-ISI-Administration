@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Upload, X, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { toast } from 'sonner'; // ✅ Ajoutez cet import
 
 interface UploadedFile {
   name: string;
@@ -22,9 +23,41 @@ export function FileUploader({ onFilesChange }: FileUploaderProps) {
 
   const handleSelectFile = async (fileType: 'teachers' | 'wishes' | 'exams') => {
     try {
+      console.log('🔍 Sélection du fichier:', fileType);
       const filePath = await (window as any).electronAPI.selectFile(fileType);
+      console.log('📁 Fichier sélectionné:', filePath);
+      console.log('📁 Type:', typeof filePath, filePath);
 
       if (filePath) {
+        const standardFileName = fileType === 'teachers'
+          ? 'Enseignants_participants.xlsx'
+          : fileType === 'wishes'
+            ? 'Souhaits_avec_ids.xlsx'
+            : 'Répartition_SE_dedup.xlsx';
+
+        const dataToSend = {
+          fileName: standardFileName,
+          filePath: filePath
+        };
+
+        console.log('💾 Envoi à saveUploadedFile:', dataToSend);
+        console.log('💾 fileName:', dataToSend.fileName);
+        console.log('💾 filePath:', dataToSend.filePath);
+        console.log('💾 Objet stringifié:', JSON.stringify(dataToSend)); // ✅ Voir le contenu exact
+
+        const saveResult = await (window as any).electronAPI.saveUploadedFile(dataToSend);
+
+        console.log('✅ Résultat de la sauvegarde:', saveResult);
+        console.log('✅ Résultat stringifié:', JSON.stringify(saveResult)); // ✅ Voir le contenu exact
+
+        if (!saveResult || !saveResult.success) {
+          toast.error(`Erreur de sauvegarde: ${saveResult?.error || 'Erreur inconnue'}`);
+          console.error('❌ Erreur de sauvegarde:', saveResult?.error);
+          return;
+        }
+
+        toast.success(`${standardFileName} chargé avec succès`);
+
         const fileName = filePath.split('\\').pop() || filePath.split('/').pop();
         const newFile: UploadedFile = {
           name: fileName,
@@ -37,7 +70,6 @@ export function FileUploader({ onFilesChange }: FileUploaderProps) {
           [fileType]: newFile
         }));
 
-        // Notifier le parent
         onFilesChange({
           teachers: files.teachers?.path,
           wishes: files.wishes?.path,
@@ -46,11 +78,10 @@ export function FileUploader({ onFilesChange }: FileUploaderProps) {
         });
       }
     } catch (error) {
-      console.error('Error selecting file:', error);
+      console.error('❌ Error selecting file:', error);
+      toast.error('Erreur lors de la sélection du fichier');
     }
-  };
-
-  const handleRemoveFile = (fileType: 'teachers' | 'wishes' | 'exams') => {
+  };  const handleRemoveFile = (fileType: 'teachers' | 'wishes' | 'exams') => {
     setFiles(prev => {
       const updated = { ...prev };
       delete updated[fileType];
