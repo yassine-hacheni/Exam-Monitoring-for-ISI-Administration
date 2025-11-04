@@ -16,6 +16,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import { Label } from '@/components/ui/label.tsx'
 import { Input } from '@/components/ui/input.tsx'
+import { SendMail } from './components/SendMail';
 
 interface PlanningRow {
   Date: string;
@@ -40,7 +41,8 @@ const DEFAULT_GRADE_HOURS: Record<string, number> = {
         AS: 12.0,    
         PTC: 13.5,   
         PES: 13.5,   
-        V: 6.0,
+        VA: 6.0, 
+        V: 6.0,     
         EX: 4.5    
     }
 
@@ -258,7 +260,13 @@ export default function PlanningPage() {
 
             <div className="flex flex-wrap gap-2">
               <ViewToggle view={viewMode} onViewChange={setViewMode} />
-              {viewMode === 'calendar' && <ExportCalendarButton disabled={!result?.success} />}
+              {viewMode === 'calendar' && (
+                <>
+                  <ExportCalendarButton disabled={!result?.success} />
+                  <SendMail planningData={planningData} disabled={!result?.success} />
+                </>
+              )}
+              
               <SaveSessionDialog planningData={planningData} disabled={!result?.success} />
               <ExportButtons disabled={!result?.success} />
             </div>
